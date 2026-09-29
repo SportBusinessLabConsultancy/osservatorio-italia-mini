@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Osservatorio Italia — Mappa (versione pubblica)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+<style>
+  html, body { height: 100%; }
+  #mappa { width: 100%; height: 100%; background: #e8e4da; }
+  .popup-titolo { font-family: 'Fraunces', serif; font-weight: 600; font-size: 0.95rem; margin-bottom: 0.3rem; }
+  .popup-riga { font-size: 0.82rem; margin: 0.1rem 0; }
+  .popup-etichetta { color: #4a5560; }
+</style>
+</head>
+<body>
+
+<div class="barra-top">
+  <div class="titolo-vista">Osservatorio Italia — Mappa (versione pubblica)</div>
+</div>
+
+<div class="corpo-vista">
+  <div class="sidebar" id="sidebar">
+    <h2>Mappe tematiche</h2>
+    <div id="lista-livelli"></div>
+    <div class="avviso">
+      Questa è una versione ridotta del geoportale, con solo i dati puntuali più leggeri.
+      La versione completa (isocrone di accessibilità, aree verdi, rete idrica, strutture sportive
+      capillari) è disponibile sul server interno — contatta il team per l'accesso.
+      Clicca su un elemento per vedere i dettagli.
+    </div>
+  </div>
+  <div class="mappa"><div id="mappa"></div></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+console.log("Script index.html (mini) avviato.");
+
+// Regioni italiane usate per lo split di strutture_sportive
+// (file in data/strutture_sportive_regioni/<slug>.geojson)
+const REGIONI = [
+  { slug: "abruzzo", nome: "Abruzzo" },
+  { slug: "basilicata", nome: "Basilicata" },
+  { slug: "calabria", nome: "Calabria" },
+  { slug: "campania", nome: "Campania" },
+  { slug: "emilia-romagna", nome: "Emilia-Romagna" },
+  { slug: "friuli-venezia-giulia", nome: "Friuli-Venezia Giulia" },
+  { slug: "lazio", nome: "Lazio" },
+  { slug: "liguria", nome: "Liguria" },
+  { slug: "lombardia", nome: "Lombardia" },
+  { slug: "marche", nome: "Marche" },
+  { slug: "molise", nome: "Molise" },
+  { slug: "piemonte", nome: "Piemonte" },
+  { slug: "puglia", nome: "Puglia" },
+  { slug: "sardegna", nome: "Sardegna" },
+  { slug: "sicilia", nome: "Sicilia" },
+  { slug: "toscana", nome: "Toscana" },
+  { slug: "trentino-alto-adige", nome: "Trentino-Alto Adige" },
+  { slug: "umbria", nome: "Umbria" },
+  { slug: "valle-daosta", nome: "Valle d'Aosta" },
+  { slug: "veneto", nome: "Veneto" },
+];
+// NB: controlla che gli slug corrispondano esattamente ai nomi dei file in
+// data/strutture_sportive_regioni/ (case e trattini) — correggi qui se necessario.
+
+const LIVELLI = [
+  { id: "scuole", nome: "Edifici scolastici", colore: "#e6194B", file: "data/edifici_scolastici.geojson", punti: true, accesoDiDefault: true, tipoScuola: true },
+  {
+    id: "sport", nome: "Strutture sportive", colore: "#3cb44b",
+    multiFile: true,
+    cartella: "data/strutture_sportive_regioni/",
+    regioni: REGIONI,
+    punti: false,
+    popupSemplificato: true,
+  },
+  { id: "turismo", nome: "Luoghi turistici", colore: "#ffb300", file: "data/luoghi_turistici.geojson", punti: true },
+  { id: "cultura", nome: "Mappa culturale", colore: "#4363d8", file: "data/mappa_culturale.geojson", punti: false },
+  { id: "stazioni", nome: "Stazioni", colore: "#f58231", file: "data/stazioni.geojson", punti: true },
+  { id: "bus", nome: "Bus", colore: "#911eb4", file: "data/bus.geojson", punti: true },
+  { id: "aree_pubbliche", nome: "Aree pubbliche", colore: "#7fcf9a", file: "data/aree_pubbliche.geojson", punti: false },
+  { id: "biblioteche", nome: "Biblioteche", colore: "#bfef45", file: "data/biblioteche.geojson", punti: true },
+  { id: "parchi", nome: "Parchi", colore: "#469990", file: "data/parchi.geojson", punti: false },
+];
+// Livelli esclusi da questa versione mini perché troppo pesanti per GitHub
+// (limite 100 MB/file): aree_verdi, rete_idrica, isocrone.
+
+const mappa = L.map('mappa').setView([42.5, 12.5], 6);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19,
+}).addTo(mappa);
+
+console.log("Mappa Leaflet inizializzata:", mappa);
+
+const layerLeaflet = {};
+
+function analizzaOtherTags(stringa) {
+  const risultato = {};
+  if (!stringa) return risultato;
+  const regex = /"([^"]+)"=>"([^"]*)"/g;
+  let match;
+  while ((match = regex.exec(stringa)) !== null) {
+    risultato[match[1]] = match[2];
+  }
+  return risultato;
+}
+
+function ottieniTag(props, chiave) {
+  try {
+    if (props[chiave]) return props[chiave];
+    if (props.tags && props.tags[chiave]) return props.tags[chiave];
+    if (props.other_tags) {
+      const parsati = analizzaOtherTags(props.other_tags);
+      if (parsati[chiave]) return parsati[chiave];
+    }
+  } catch (e) {
+    console.warn("Errore in ottieniTag:", e);
+  }
+  return null;
+}
+
+function ottieniNome(props) {
+  return ottieniTag(props, 'name') || 'N/D';
+}
+
+function ottieniTipoScuola(props) {
+  return ottieniTag(props, 'isced:level') || ottieniTag(props, 'school') || 'N/D';
+}
+
+function costruisciPopup(props, livello) {
+  try {
+    const nome = ottieniNome(props);
+
+    // Layer con popup semplificato (es. strutture sportive: solo nome + regione)
+    if (livello.popupSemplificato) {
+      const regione = props.regione || 'N/D';
+      let html = `<div class="popup-titolo">${nome}</div>`;
+      html += `<div class="popup-riga"><span class="popup-etichetta">Regione:</span> ${regione}</div>`;
+      return html;
+    }
+
+    const comune = props.comune || 'N/D';
+    const provincia = props.provincia || 'N/D';
+    const regione = props.regione || 'N/D';
+    let html = `<div class="popup-titolo">${nome}</div>`;
+    html += `<div class="popup-riga"><span class="popup-etichetta">Comune:</span> ${comune}</div>`;
+    html += `<div class="popup-riga"><span class="popup-etichetta">Provincia:</span> ${provincia}</div>`;
+    html += `<div class="popup-riga"><span class="popup-etichetta">Regione:</span> ${regione}</div>`;
+    if (livello.tipoScuola) {
+      html += `<div class="popup-riga"><span class="popup-etichetta">Tipo scuola:</span> ${ottieniTipoScuola(props)}</div>`;
+    }
+    return html;
+  } catch (e) {
+    console.error("Errore in costruisciPopup:", e);
+    return "<div>Errore nel costruire il popup</div>";
+  }
+}
+
+function creaRigaSidebar(livello) {
+  const div = document.createElement('div');
+  div.className = 'riga-livello';
+  div.innerHTML = `
+    <input type="checkbox" id="chk-${livello.id}" ${livello.accesoDiDefault ? 'checked' : ''}>
+    <span class="pallino" style="background:${livello.colore}"></span>
+    <label for="chk-${livello.id}">${livello.nome}</label>
+    <span class="stato-caricamento" id="stato-${livello.id}"></span>
+  `;
+  document.getElementById('lista-livelli').appendChild(div);
+
+  const checkbox = div.querySelector('input');
+  checkbox.addEventListener('change', () => {
+    if (checkbox.checked) attivaLivello(livello);
+    else disattivaLivello(livello);
+  });
+
+  if (livello.accesoDiDefault) attivaLivello(livello);
+}
+
+function creaLayerDaFeatureCollection(dati, livello) {
+  return L.geoJSON(dati, {
+    pointToLayer: (feat, latlng) => L.circleMarker(latlng, {
+      radius: 6, color: '#222', weight: 1, fillColor: livello.colore,
+      fillOpacity: 0.85,
+    }),
+    style: () => ({ color: livello.colore, weight: 1, fillOpacity: 0.35 }),
+    onEachFeature: (feature, layerSingolo) => {
+      const contenutoPopup = costruisciPopup(feature.properties || {}, livello);
+      layerSingolo.on('click', (e) => {
+        console.log("Click su feature:", feature.properties);
+        L.popup()
+          .setLatLng(e.latlng)
+          .setContent(contenutoPopup)
+          .openOn(mappa);
+      });
+    },
+  });
+}
+
+function attivaLivello(livello) {
+  if (layerLeaflet[livello.id]) {
+    mappa.addLayer(layerLeaflet[livello.id]);
+    return;
+  }
+  const stato = document.getElementById(`stato-${livello.id}`);
+  stato.textContent = 'carico…';
+
+  if (livello.multiFile) {
+    // Carica tutti i file regionali in parallelo e li unisce in un solo layer
+    const richieste = livello.regioni.map(regione =>
+      fetch(`${livello.cartella}${regione.slug}.geojson`)
+        .then(r => {
+          if (!r.ok) throw new Error(`file non trovato: ${regione.slug}`);
+          return r.json();
+        })
+        .then(dati => {
+          // Etichetta ogni feature con il nome della regione (i file per_regione
+          // potrebbero non avere già il campo "regione" arricchito)
+          dati.features.forEach(f => {
+            if (!f.properties) f.properties = {};
+            if (!f.properties.regione) f.properties.regione = regione.nome;
+          });
+          return dati.features;
+        })
+        .catch(err => {
+          console.warn(`Errore caricando regione ${regione.slug}:`, err);
+          return [];
+        })
+    );
+
+    Promise.all(richieste).then(listeFeature => {
+      const tutteLeFeature = listeFeature.flat();
+      const collezione = { type: "FeatureCollection", features: tutteLeFeature };
+      console.log(`[${livello.nome}] Dati caricati (tutte le regioni):`, tutteLeFeature.length, "feature.");
+      const layer = creaLayerDaFeatureCollection(collezione, livello).addTo(mappa);
+      layerLeaflet[livello.id] = layer;
+      stato.textContent = `${tutteLeFeature.length.toLocaleString('it-IT')}`;
+      console.log(`[${livello.nome}] Layer aggiunto alla mappa.`);
+    });
+    return;
+  }
+
+  fetch(livello.file)
+    .then(r => {
+      if (!r.ok) throw new Error('file non trovato');
+      return r.json();
+    })
+    .then(dati => {
+      console.log(`[${livello.nome}] Dati caricati:`, dati.features.length, "feature. Esempio properties:", dati.features[0] ? dati.features[0].properties : null);
+      const layer = creaLayerDaFeatureCollection(dati, livello).addTo(mappa);
+      layerLeaflet[livello.id] = layer;
+      stato.textContent = `${dati.features.length.toLocaleString('it-IT')}`;
+      console.log(`[${livello.nome}] Layer aggiunto alla mappa.`);
+    })
+    .catch(err => {
+      stato.textContent = 'errore';
+      console.error(`Errore caricando ${livello.nome}:`, err);
+    });
+}
+
+function disattivaLivello(livello) {
+  if (layerLeaflet[livello.id]) mappa.removeLayer(layerLeaflet[livello.id]);
+}
+
+LIVELLI.forEach(creaRigaSidebar);
+</script>
+
+</body>
+</html>
