@@ -9,7 +9,6 @@ pubbliche, biblioteche, parchi).
 
 **[Apri la mappa live](https://SportBusinessLabConsultancy.github.io/osservatorio-italia-mini/)**
 
-*(link da verificare/correggere con lo username GitHub esatto una volta attivato GitHub Pages)*
 
 ## Cos'è questa versione
 
